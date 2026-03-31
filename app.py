@@ -3,6 +3,7 @@ import os
 import streamlit as st
 from pyvis.network import Network
 
+import auth as app_auth
 import db as graphdb
 
 
@@ -68,6 +69,8 @@ def render_network(nodes: list[graphdb.Node], edges: list[graphdb.Edge]) -> str:
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
+    app_auth.require_login(APP_TITLE)
+
     st.title(APP_TITLE)
     st.caption("Crea nodos/relaciones, persiste en SQLite, y visualiza el grafo.")
     st.markdown(
@@ -294,6 +297,9 @@ def main() -> None:
                 if st.button("Proyecto", use_container_width=True, key="menu_btn_project"):
                     project_dialog()
             if st.button("Refrescar", use_container_width=True, key="menu_btn_refresh"):
+                st.rerun()
+            if st.button("Cerrar sesión", use_container_width=True, key="menu_btn_logout"):
+                app_auth.logout()
                 st.rerun()
 
     if not nodes:
