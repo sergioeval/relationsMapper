@@ -207,15 +207,17 @@ def main() -> None:
                     format_func=lambda nid: f"{node_by_id[nid].label} ({nid})",
                     key="dlg_edit_node_id",
                 )
+                # Keys por nodo: si no, Streamlit mantiene el texto del registro anterior.
+                n_sel = node_by_id[node_id]
                 edit_label = st.text_input(
                     "Nuevo label",
-                    value=node_by_id[node_id].label,
-                    key="dlg_edit_node_label",
+                    value=n_sel.label,
+                    key=f"dlg_edit_node_label_{node_id}",
                 )
                 edit_group = st.text_input(
                     "Nuevo grupo (opcional)",
-                    value=node_by_id[node_id].group_name or "",
-                    key="dlg_edit_node_group",
+                    value=n_sel.group_name or "",
+                    key=f"dlg_edit_node_group_{node_id}",
                 )
 
                 c1, c2 = st.columns(2)
@@ -247,22 +249,31 @@ def main() -> None:
                     st.info("Necesitas al menos 2 nodos para editar relaciones.")
                     return
                 node_ids = [n.id for n in nodes]
+                # Keys por relación: origen/destino y textos reflejan el registro elegido.
                 src2 = st.selectbox(
                     "Origen",
                     options=node_ids,
                     index=node_ids.index(edge.source_id) if edge.source_id in node_by_id else 0,
                     format_func=lambda nid: f"{node_by_id[nid].label} ({nid})",
-                    key="dlg_edit_edge_src",
+                    key=f"dlg_edit_edge_src_{edge_id}",
                 )
                 dst2 = st.selectbox(
                     "Destino",
                     options=node_ids,
                     index=node_ids.index(edge.target_id) if edge.target_id in node_by_id else 0,
                     format_func=lambda nid: f"{node_by_id[nid].label} ({nid})",
-                    key="dlg_edit_edge_dst",
+                    key=f"dlg_edit_edge_dst_{edge_id}",
                 )
-                rel_type2 = st.text_input("Tipo (opcional)", value=edge.relation_type or "", key="dlg_edit_edge_type")
-                rel_label2 = st.text_input("Label (opcional)", value=edge.label or "", key="dlg_edit_edge_label")
+                rel_type2 = st.text_input(
+                    "Tipo (opcional)",
+                    value=edge.relation_type or "",
+                    key=f"dlg_edit_edge_type_{edge_id}",
+                )
+                rel_label2 = st.text_input(
+                    "Label (opcional)",
+                    value=edge.label or "",
+                    key=f"dlg_edit_edge_label_{edge_id}",
+                )
 
                 c1, c2 = st.columns(2)
                 with c1:
