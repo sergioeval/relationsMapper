@@ -1,5 +1,6 @@
 import os
 
+import psycopg2
 import streamlit as st
 from pyvis.network import Network
 
@@ -7,7 +8,7 @@ import auth as app_auth
 import db as graphdb
 
 
-APP_TITLE = "Relation Mapper (Streamlit + SQLite)"
+APP_TITLE = "Relation Mapper (Streamlit + Postgres)"
 
 
 def render_network(nodes: list[graphdb.Node], edges: list[graphdb.Edge]) -> str:
@@ -72,7 +73,7 @@ def main() -> None:
     app_auth.require_login(APP_TITLE)
 
     st.title(APP_TITLE)
-    st.caption("Crea nodos/relaciones, persiste en SQLite, y visualiza el grafo.")
+    st.caption("Crea nodos/relaciones, persiste en Postgres (Supabase), y visualiza el grafo.")
     st.markdown(
         """
         <style>
@@ -102,30 +103,49 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    db_path = "graph.sqlite"
-    graphdb.init_db(db_path)
+    try:
+        graphdb.init_db()
+    except psycopg2.OperationalError as e:
+        err = str(e)
+        st.error("No se pudo conectar a la base de datos.")
+        if "Network is unreachable" in err or "2600:" in err:
+            st.markdown(
+                """
+                El host **directo** `db.*.supabase.co` suele ser **solo IPv6**. Muchas redes no
+                enrutan IPv6 y por eso falla la conexión.
 
-    projects = graphdb.list_projects(db_path)
+                **Qué hacer:** en el panel de Supabase, **Settings → Database → Connect**,
+                elige **Session pooler** (o **Transaction pooler**) y copia **host** (algo como
+                `aws-0-REGION.pooler.supabase.com`), **puerto** y **usuario** que te muestre.
+                Actualiza la sección `[database]` en `.streamlit/secrets.toml`.
+
+                Más detalle en `.streamlit/secrets.toml.example`.
+                """
+            )
+        st.code(err, language="text")
+        st.stop()
+
+    projects = graphdb.list_projects()
     if not projects:
-        graphdb.ensure_project(db_path, "Default")
-        projects = graphdb.list_projects(db_path)
+        graphdb.ensure_project("Default")
+        projects = graphdb.list_projects()
     project_by_id = {p.id: p for p in projects}
 
     if "selected_project_id" not in st.session_state or st.session_state["selected_project_id"] not in project_by_id:
         st.session_state["selected_project_id"] = projects[0].id
     selected_project_id = st.session_state["selected_project_id"]
 
-    nodes = graphdb.list_nodes(db_path, selected_project_id)
-    edges = graphdb.list_edges(db_path, selected_project_id)
+    nodes = graphdb.list_nodes(selected_project_id)
+    edges = graphdb.list_edges(selected_project_id)
     node_by_id = {n.id: n for n in nodes}
 
     @st.dialog("Proyecto")
     def project_dialog() -> None:
         st.subheader("Seleccionar proyecto")
-        current_projects = graphdb.list_projects(db_path)
+        current_projects = graphdb.list_projects()
         if not current_projects:
-            graphdb.ensure_project(db_path, "Default")
-            current_projects = graphdb.list_projects(db_path)
+            graphdb.ensure_project("Default")
+            current_projects = graphdb.list_projects()
         by_id = {p.id: p for p in current_projects}
 
         pid = st.selectbox(
@@ -147,7 +167,7 @@ def main() -> None:
                 st.error("El nombre no puede estar vacío.")
             else:
                 try:
-                    p = graphdb.create_project(db_path, new_project_name)
+                    p = graphdb.create_project(new_project_name)
                     st.session_state["selected_project_id"] = p.id
                     st.rerun()
                 except Exception as e:
@@ -161,7 +181,7 @@ def main() -> None:
             if not new_label.strip():
                 st.error("El label no puede estar vacío.")
             else:
-                graphdb.create_node(db_path, selected_project_id, new_label, new_group)
+                graphdb.create_node(selected_project_id, new_label, new_group)
                 st.rerun()
 
     @st.dialog("Nueva relación")
@@ -188,7 +208,7 @@ def main() -> None:
                 st.error("Origen y destino no pueden ser el mismo nodo.")
             else:
                 try:
-                    graphdb.create_edge(db_path, selected_project_id, src, dst, rel_label, rel_type)
+                    graphdb.create_edge(selected_project_id, src, dst, rel_label, rel_type)
                     st.rerun()
                 except Exception as e:
                     st.error(f"No se pudo crear la relación: {e}")
@@ -226,11 +246,11 @@ def main() -> None:
                         if not edit_label.strip():
                             st.error("El label no puede estar vacío.")
                         else:
-                            graphdb.update_node(db_path, node_id, edit_label, edit_group)
+                            graphdb.update_node(node_id, edit_label, edit_group)
                             st.rerun()
                 with c2:
                     if st.button("Borrar nodo", use_container_width=True, key="dlg_btn_delete_node"):
-                        graphdb.delete_node(db_path, node_id)
+                        graphdb.delete_node(node_id)
                         st.rerun()
 
         with tab_edges:
@@ -281,11 +301,11 @@ def main() -> None:
                         if src2 == dst2:
                             st.error("Origen y destino no pueden ser el mismo nodo.")
                         else:
-                            graphdb.update_edge(db_path, edge_id, src2, dst2, rel_label2, rel_type2)
+                            graphdb.update_edge(edge_id, src2, dst2, rel_label2, rel_type2)
                             st.rerun()
                 with c2:
                     if st.button("Borrar relación", use_container_width=True, key="dlg_btn_delete_edge"):
-                        graphdb.delete_edge(db_path, edge_id)
+                        graphdb.delete_edge(edge_id)
                         st.rerun()
 
     header_left, header_right = st.columns([0.82, 0.18], gap="small", vertical_alignment="center")
