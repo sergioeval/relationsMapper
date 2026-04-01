@@ -5,6 +5,7 @@ import streamlit as st
 from pyvis.network import Network
 
 import auth as app_auth
+import data_cache as dcache
 import db as graphdb
 
 
@@ -103,8 +104,11 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    scope = dcache.ensure_session_cache_scope()
+    rev = dcache.get_data_revision()
+
     try:
-        graphdb.init_db()
+        dcache.ensure_database_schema()
     except psycopg2.OperationalError as e:
         err = str(e)
         st.error("No se pudo conectar a la base de datos.")
@@ -125,27 +129,30 @@ def main() -> None:
         st.code(err, language="text")
         st.stop()
 
-    projects = graphdb.list_projects()
+    projects = list(dcache.load_projects(scope, rev))
     if not projects:
         graphdb.ensure_project("Default")
-        projects = graphdb.list_projects()
+        dcache.bump_data_cache()
+        st.rerun()
     project_by_id = {p.id: p for p in projects}
 
     if "selected_project_id" not in st.session_state or st.session_state["selected_project_id"] not in project_by_id:
         st.session_state["selected_project_id"] = projects[0].id
     selected_project_id = st.session_state["selected_project_id"]
 
-    nodes = graphdb.list_nodes(selected_project_id)
-    edges = graphdb.list_edges(selected_project_id)
+    nodes = list(dcache.load_nodes(scope, rev, selected_project_id))
+    edges = list(dcache.load_edges(scope, rev, selected_project_id))
     node_by_id = {n.id: n for n in nodes}
 
     @st.dialog("Proyecto")
     def project_dialog() -> None:
         st.subheader("Seleccionar proyecto")
-        current_projects = graphdb.list_projects()
+        _r = dcache.get_data_revision()
+        current_projects = list(dcache.load_projects(scope, _r))
         if not current_projects:
             graphdb.ensure_project("Default")
-            current_projects = graphdb.list_projects()
+            dcache.bump_data_cache()
+            st.rerun()
         by_id = {p.id: p for p in current_projects}
 
         pid = st.selectbox(
@@ -169,6 +176,7 @@ def main() -> None:
                 try:
                     p = graphdb.create_project(new_project_name)
                     st.session_state["selected_project_id"] = p.id
+                    dcache.bump_data_cache()
                     st.rerun()
                 except Exception as e:
                     st.error(f"No se pudo crear el proyecto: {e}")
@@ -182,6 +190,7 @@ def main() -> None:
                 st.error("El label no puede estar vacío.")
             else:
                 graphdb.create_node(selected_project_id, new_label, new_group)
+                dcache.bump_data_cache()
                 st.rerun()
 
     @st.dialog("Nueva relación")
@@ -209,6 +218,7 @@ def main() -> None:
             else:
                 try:
                     graphdb.create_edge(selected_project_id, src, dst, rel_label, rel_type)
+                    dcache.bump_data_cache()
                     st.rerun()
                 except Exception as e:
                     st.error(f"No se pudo crear la relación: {e}")
@@ -247,10 +257,12 @@ def main() -> None:
                             st.error("El label no puede estar vacío.")
                         else:
                             graphdb.update_node(node_id, edit_label, edit_group)
+                            dcache.bump_data_cache()
                             st.rerun()
                 with c2:
                     if st.button("Borrar nodo", use_container_width=True, key="dlg_btn_delete_node"):
                         graphdb.delete_node(node_id)
+                        dcache.bump_data_cache()
                         st.rerun()
 
         with tab_edges:
@@ -302,10 +314,12 @@ def main() -> None:
                             st.error("Origen y destino no pueden ser el mismo nodo.")
                         else:
                             graphdb.update_edge(edge_id, src2, dst2, rel_label2, rel_type2)
+                            dcache.bump_data_cache()
                             st.rerun()
                 with c2:
                     if st.button("Borrar relación", use_container_width=True, key="dlg_btn_delete_edge"):
                         graphdb.delete_edge(edge_id)
+                        dcache.bump_data_cache()
                         st.rerun()
 
     header_left, header_right = st.columns([0.82, 0.18], gap="small", vertical_alignment="center")
@@ -328,6 +342,7 @@ def main() -> None:
                 if st.button("Proyecto", use_container_width=True, key="menu_btn_project"):
                     project_dialog()
             if st.button("Refrescar", use_container_width=True, key="menu_btn_refresh"):
+                dcache.bump_data_cache()
                 st.rerun()
             if st.button("Cerrar sesión", use_container_width=True, key="menu_btn_logout"):
                 app_auth.logout()
