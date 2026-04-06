@@ -228,6 +228,7 @@ class Node:
     label: str
     project_id: str
     group_name: Optional[str] = None
+    comments: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -347,6 +348,9 @@ def init_db() -> None:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_edges_project ON edges(project_id);"
             )
+            cur.execute(
+                "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS comments TEXT;"
+            )
 
 
 def _new_id(prefix: str) -> str:
@@ -390,7 +394,7 @@ def list_nodes(project_id: str) -> list[Node]:
         with con.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, label, project_id, group_name
+                SELECT id, label, project_id, group_name, comments
                 FROM nodes
                 WHERE project_id = %s
                 ORDER BY created_at DESC, label ASC
@@ -404,9 +408,32 @@ def list_nodes(project_id: str) -> list[Node]:
                 label=r["label"],
                 project_id=r["project_id"],
                 group_name=r["group_name"],
+                comments=r["comments"],
             )
             for r in rows
         ]
+
+
+def get_node(node_id: str) -> Optional[Node]:
+    with db_conn() as con:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, label, project_id, group_name, comments
+                FROM nodes WHERE id = %s
+                """,
+                (node_id,),
+            )
+            r = cur.fetchone()
+    if not r:
+        return None
+    return Node(
+        id=r["id"],
+        label=r["label"],
+        project_id=r["project_id"],
+        group_name=r["group_name"],
+        comments=r["comments"],
+    )
 
 
 def create_node(project_id: str, label: str, group_name: Optional[str] = None) -> Node:
@@ -415,12 +442,13 @@ def create_node(project_id: str, label: str, group_name: Optional[str] = None) -
         label=label.strip(),
         project_id=project_id,
         group_name=(group_name or None),
+        comments=None,
     )
     with db_conn() as con:
         with con.cursor() as cur:
             cur.execute(
-                "INSERT INTO nodes(id, label, project_id, group_name) VALUES (%s, %s, %s, %s)",
-                (node.id, node.label, node.project_id, node.group_name),
+                "INSERT INTO nodes(id, label, project_id, group_name, comments) VALUES (%s, %s, %s, %s, %s)",
+                (node.id, node.label, node.project_id, node.group_name, node.comments),
             )
     return node
 
@@ -431,6 +459,16 @@ def update_node(node_id: str, label: str, group_name: Optional[str]) -> None:
             cur.execute(
                 "UPDATE nodes SET label = %s, group_name = %s WHERE id = %s",
                 (label.strip(), group_name or None, node_id),
+            )
+
+
+def update_node_comments(node_id: str, comments: Optional[str]) -> None:
+    text = comments.strip() if comments else None
+    with db_conn() as con:
+        with con.cursor() as cur:
+            cur.execute(
+                "UPDATE nodes SET comments = %s WHERE id = %s",
+                (text, node_id),
             )
 
 

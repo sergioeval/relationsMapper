@@ -1,3 +1,4 @@
+import html
 import os
 
 import psycopg2
@@ -10,6 +11,42 @@ import db as graphdb
 
 
 APP_TITLE = "Relation Mapper (Streamlit + Postgres)"
+
+_GRAPH_CLICK_SCRIPT = """
+<script>
+(function() {
+  if (window._relMapperNodeClickAttached) return;
+  function attach() {
+    if (typeof network === "undefined" || network === null) {
+      setTimeout(attach, 30);
+      return;
+    }
+    window._relMapperNodeClickAttached = true;
+    network.on("click", function(params) {
+      if (params.nodes && params.nodes.length > 0) {
+        var id = params.nodes[0];
+        try {
+          var p = window.parent;
+          var u = new URL(p.location.href);
+          u.searchParams.set("node", id);
+          p.location.href = u.toString();
+        } catch (e) { console.error(e); }
+      }
+    });
+  }
+  setTimeout(attach, 0);
+})();
+</script>
+"""
+
+
+def inject_graph_node_click(html: str) -> str:
+    """Al hacer clic en un nodo, recarga la app con ?node=<id> para abrir el diálogo de comentarios."""
+    lower = html.lower()
+    idx = lower.rfind("</body>")
+    if idx == -1:
+        return html + _GRAPH_CLICK_SCRIPT
+    return html[:idx] + _GRAPH_CLICK_SCRIPT + html[idx:]
 
 
 def render_network(nodes: list[graphdb.Node], edges: list[graphdb.Edge]) -> str:
@@ -32,10 +69,15 @@ def render_network(nodes: list[graphdb.Node], edges: list[graphdb.Edge]) -> str:
         group = n.group_name or "default"
         if group not in group_to_color:
             group_to_color[group] = group_palette[len(group_to_color) % len(group_palette)]
+        tip = f"<b>{n.label}</b><br/>{n.id}<br/>grupo: {n.group_name or '-'}"
+        if n.comments:
+            prev = (n.comments[:120] + "…") if len(n.comments) > 120 else n.comments
+            tip += f"<br/><br/><i>Comentarios:</i><br/>{html.escape(prev)}"
+        tip += "<br/><br/><small>Clic para editar comentarios</small>"
         net.add_node(
             n.id,
             label=n.label,
-            title=f"<b>{n.label}</b><br/>{n.id}<br/>grupo: {n.group_name or '-'}",
+            title=tip,
             color=group_to_color[group],
         )
 
@@ -144,6 +186,47 @@ def main() -> None:
     edges = list(dcache.load_edges(scope, rev, selected_project_id))
     node_by_id = {n.id: n for n in nodes}
 
+    if "node" in st.query_params:
+        raw = st.query_params.get("node")
+        if isinstance(raw, list):
+            _nid = str(raw[0]).strip() if raw else ""
+        else:
+            _nid = str(raw or "").strip()
+        if _nid:
+            st.session_state["open_comments_node"] = _nid
+        try:
+            del st.query_params["node"]
+        except Exception:
+            pass
+        st.rerun()
+
+    @st.dialog("Comentarios del nodo")
+    def node_comments_dialog(node_id: str, project_id: str) -> None:
+        n = graphdb.get_node(node_id)
+        if not n or n.project_id != project_id:
+            st.error("Nodo no encontrado en este proyecto.")
+            return
+        st.markdown(f"**{n.label}** · `{node_id}`")
+        txt = st.text_area(
+            "Comentarios",
+            value=n.comments or "",
+            height=240,
+            key=f"dlg_node_comments_area_{node_id}",
+        )
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Guardar", type="primary", use_container_width=True, key=f"dlg_node_comments_save_{node_id}"):
+                graphdb.update_node_comments(node_id, txt)
+                dcache.bump_data_cache()
+                st.rerun()
+        with b2:
+            if st.button("Cerrar", use_container_width=True, key=f"dlg_node_comments_close_{node_id}"):
+                st.rerun()
+
+    _open_comments = st.session_state.pop("open_comments_node", None)
+    if _open_comments and _open_comments in node_by_id:
+        node_comments_dialog(_open_comments, selected_project_id)
+
     @st.dialog("Proyecto")
     def project_dialog() -> None:
         st.subheader("Seleccionar proyecto")
@@ -249,6 +332,12 @@ def main() -> None:
                     value=n_sel.group_name or "",
                     key=f"dlg_edit_node_group_{node_id}",
                 )
+                edit_comments = st.text_area(
+                    "Comentarios",
+                    value=n_sel.comments or "",
+                    height=120,
+                    key=f"dlg_edit_node_comments_{node_id}",
+                )
 
                 c1, c2 = st.columns(2)
                 with c1:
@@ -257,6 +346,7 @@ def main() -> None:
                             st.error("El label no puede estar vacío.")
                         else:
                             graphdb.update_node(node_id, edit_label, edit_group)
+                            graphdb.update_node_comments(node_id, edit_comments)
                             dcache.bump_data_cache()
                             st.rerun()
                 with c2:
@@ -351,7 +441,8 @@ def main() -> None:
     if not nodes:
         st.info("Crea nodos para ver el mapa.")
     else:
-        html = render_network(nodes, edges)
+        st.caption("Haz **clic en un nodo** del mapa para abrir comentarios editables.")
+        html = inject_graph_node_click(render_network(nodes, edges))
         st.components.v1.html(html, height=820, scrolling=True)
 
         st.subheader("Datos (debug)")
